@@ -4,11 +4,15 @@ Plugin Name: Piwik Analytics
 Plugin URI: http://forwardslash.nl/piwik-analytics
 Description: This plugin makes it simple to add Piwik Analytics code to your blog. <a href="options-general.php?page=piwikanalytics.php">Configuration Page</a>
 Author: Jules Stuifbergen
-Version: 1.0.2
+Version: 1.0.3-patch-hay
 Author URI: http://forwardslash.nl/
 License: GPL
 
 Based on Joost de Valk's Google Analytics for Wordpress plugin
+
+Release notes
+1.0.3: Added an option to use the asynchronous tracking code (Hay Kranen > @huskyr)
+	   See: http://piwik.org/docs/javascript-tracking/#toc-asynchronous-tracking
 
 */
 
@@ -40,32 +44,25 @@ if ( ! class_exists( 'PA_Admin' ) ) {
 				$options['piwik_host'] = '';
 				$options['piwik_baseurl'] = '/piwik/';
 				$options['admintracking'] = false;
+				$options['asynccode'] = false;
 				$options['dltracking'] = true;
 				update_option('PiwikAnalyticsPP',$options);
 			}
-				
+
 			if ( isset($_POST['submit']) ) {
 				if (!current_user_can('manage_options')) die(__('You cannot edit the Piwik Analytics options.'));
 				check_admin_referer('analyticspp-config');
 				$options['siteid'] = $_POST['siteid'];
 
-				if (isset($_POST['piwik_baseurl']) && $_POST['piwik_baseurl'] != "") 
+				if (isset($_POST['piwik_baseurl']) && $_POST['piwik_baseurl'] != "")
 					$options['piwik_baseurl'] 	= strtolower($_POST['piwik_baseurl']);
 
-				if (isset($_POST['piwik_host']) && $_POST['piwik_host'] != "") 
+				if (isset($_POST['piwik_host']) && $_POST['piwik_host'] != "")
 					$options['piwik_host'] 	= strtolower($_POST['piwik_host']);
 
-				if (isset($_POST['dltracking'])) {
-					$options['dltracking'] = true;
-				} else {
-					$options['dltracking'] = false;
-				}
-
-				if (isset($_POST['admintracking'])) {
-					$options['admintracking'] = true;
-				} else {
-					$options['admintracking'] = false;
-				}
+				$options['admintracking'] = isset($_POST['admintracking']);
+				$options['dltracking'] = isset($_POST['dltracking']);
+				$options['asynccode'] = isset($_POST['asynccode']);
 
 				update_option('PiwikAnalyticsPP', $options);
 			}
@@ -107,22 +104,22 @@ if ( ! class_exists( 'PA_Admin' ) ) {
 
 								<p>In the Piwik interface, when you "Add Website"
 									you are shown a piece of JavaScript that
-									you are told to insert into the page, in that script is a 
-									unique string that identifies the website you 
+									you are told to insert into the page, in that script is a
+									unique string that identifies the website you
 									just defined, that is your site ID (usually "1").
 								<p>Once you have entered your site id in
 								   the box above your pages will be trackable by
 									Piwik Analytics.</p>
 							</div>
 						</td>
-					</tr>							
+					</tr>
 					<tr>
 						<th scope="row" valign="top">
 							<label for="dltracking">Track downloads</label><br/>
 							<small>(default is YES)</small>
 						</th>
 						<td>
-							<input type="checkbox" id="dltracking" name="dltracking" <?php if ($options['dltracking']) echo ' checked="unchecked" '; ?>/> 
+							<input type="checkbox" id="dltracking" name="dltracking" <?php if ($options['dltracking']) echo ' checked="unchecked" '; ?>/>
 						</td>
 					</tr>
 					<tr>
@@ -155,7 +152,17 @@ if ( ! class_exists( 'PA_Admin' ) ) {
 							<small>(default is not to)</small>
 						</th>
 						<td>
-							<input type="checkbox" id="admintracking" name="admintracking" <?php if ($options['admintracking']) echo ' checked="checked" '; ?>/> 
+							<input type="checkbox" id="admintracking" name="admintracking" <?php if ($options['admintracking']) echo ' checked="checked" '; ?>/>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row" valign="top">
+							<label for="asynccode">Use the <a target="_blank" href="http://piwik.org/docs/javascript-tracking/#toc-asynchronous-tracking">
+								asynchronous tracking code</a></label><br />
+							<small>(default is not to)</small>
+						</th>
+						<td>
+							<input type="checkbox" id="asynccode" name="asynccode" <?php if ($options['asynccode']) echo ' checked="checked" '; ?>/>
 						</td>
 					</tr>
 					</table>
@@ -184,10 +191,11 @@ if ( ! class_exists( 'PA_Admin' ) ) {
 			$options['piwik_host'] = '';
 			$options['piwik_baseurl'] = '/piwik/';
 			$options['admintracking'] = false;
+			$options['asynccode'] = false;
 			$options['dltracking'] = true;
 			update_option('PiwikAnalyticsPP',$options);
 		}
-		
+
 		function success() {
 			echo "
 			<div id='analytics-warning' class='updated fade-ff0000'><p><strong>Congratulations! You have just activated Piwik Analytics.</p></div>
@@ -213,15 +221,73 @@ if ( ! class_exists( 'PA_Admin' ) ) {
 if ( ! class_exists( 'PA_Filter' ) ) {
 	class PA_Filter {
 
+		function is_page_with_code() {
+			$options  = get_option('PiwikAnalyticsPP');
+
+			return (
+				$options["siteid"] != "" &&
+				(!current_user_can('edit_users') || $options["admintracking"]) &&
+				!is_preview()
+			);
+		}
+
+		function spool_analytics_head() {
+			// This is used only for the async code
+			$options  = get_option('PiwikAnalyticsPP');
+
+			if (!$options['asynccode']) return;
+
+			if (self::is_page_with_code()) {
+				$host = $options['piwik_host'];
+				$baseurl = $options['piwik_baseurl'];
+				$siteid = $options['siteid'];
+				$dltracking = $options['dltracking'];
+
+			?>
+				<!-- Piwik code inserted by Piwik Analytics Wordpress plugin by Jules Stuifbergen http://forwardslash.nl/piwik-analytics/ -->
+				<script>
+					var _paq = _paq || [];
+					(function(){
+					<?php if ($host) : ?>
+					    var url = document.location.protocol + '//' + "<?php echo $host; ?>" + "<?php echo $baseurl; ?>";
+					<?php else: ?>
+						var url = document.location.protocol + '//' + document.location.host + "<?php echo $baseurl; ?>";
+					<?php endif; ?>
+
+						_paq.push(['setSiteId', <?php echo $siteid; ?>]);
+						_paq.push(['setTrackerUrl', url + 'piwik.php']);
+						_paq.push(['trackPageView']);
+
+					<?php if ($dltracking): ?>
+						_paq.push(['enableLinkTracking']);
+					<?php endif; ?>
+
+						var script = document.createElement('script');
+						script.async = true;
+						script.type = "text/javascript";
+						script.src = url + "piwik.js";
+
+						var s = document.getElementsByTagName("script")[0];
+						s.parentNode.insertBefore(script, s);
+					})();
+				 </script>
+				<!-- End Piwik Code -->
+			<?php
+			}
+		}
+
 		/*
 		 * Insert the tracking code into the page
 		 */
-		function spool_analytics() {
+		function spool_analytics_footer() {
 			?><!-- Piwik plugin active --><?php
-			
+
 			$options  = get_option('PiwikAnalyticsPP');
-			
-			if ($options["siteid"] != "" && (!current_user_can('edit_users') || $options["admintracking"]) && !is_preview() ) { ?>
+
+			if ($options['asynccode']) return;
+
+			if (self::is_page_with_code()) {
+			?>
 				<!-- Piwik code inserted by Piwik Analytics Wordpress plugin by Jules Stuifbergen http://forwardslash.nl/piwik-analytics/ -->
 				<script type="text/javascript">
 				<?php if ( $options['piwik_host'] ) { ?>
@@ -257,7 +323,7 @@ if (function_exists("get_option")) {
 		$options  = get_option('PiwikAnalyticsPP');
 		$siteid = $options['siteid'];
 	}
-} 
+}
 
 $gaf = new PA_Filter();
 
@@ -267,14 +333,17 @@ if ($options == "") {
 	$options['piwik_host'] = '';
 	$options['piwik_baseurl'] = '/piwik/';
 	$options['dltracking'] = true;
+	$options['asynccode'] = false;
 	update_option('PiwikAnalyticsPP',$options);
 }
 
 // adds the menu item to the admin interface
 add_action('admin_menu', array('PA_Admin','add_config_page'));
 
+// adds the header if the asyncoption is true
+add_action('wp_head', array('PA_Filter','spool_analytics_head'));
 
 // adds the footer so the javascript is loaded
-add_action('wp_footer', array('PA_Filter','spool_analytics'));	
+add_action('wp_footer', array('PA_Filter','spool_analytics_footer'));
 
 ?>
